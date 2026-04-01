@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reddit Lanes</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .lane { min-width: 320px; }
+    .post-card { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+    .post-card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1); }
+    .scroll-container { scrollbar-width: thin; scrollbar-color: #4b5563 #1f2937; }
+    .scroll-container::-webkit-scrollbar { width: 6px; }
+    .scroll-container::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-200 min-h-screen">
+  <div class="flex flex-col h-screen">
+    <!-- Header -->
+    <header class="bg-zinc-900 border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <i class="fa-brands fa-reddit-alien text-orange-500 text-3xl"></i>
+        <h1 class="text-2xl font-bold tracking-tight">Reddit Lanes</h1>
+      </div>
+      
+      <div class="flex items-center gap-4">
+        <div class="flex items-center bg-zinc-800 rounded-lg px-3 py-1 text-sm">
+          <input id="subreddit-input" 
+                 type="text" 
+                 placeholder="Add subreddit (e.g. programming)"
+                 class="bg-transparent outline-none w-64 text-sm placeholder-zinc-500">
+          <button onclick="addLane()" 
+                  class="ml-2 px-4 py-1 bg-orange-600 hover:bg-orange-700 rounded-md text-sm font-medium flex items-center gap-2">
+            <i class="fas fa-plus"></i> Add Lane
+          </button>
+        </div>
+        
+        <button onclick="clearAllLanes()" 
+                class="px-4 py-2 text-zinc-400 hover:text-red-400 transition-colors flex items-center gap-2 text-sm">
+          <i class="fas fa-trash"></i> Clear All
+        </button>
+      </div>
+    </header>
+
+    <!-- Lanes Container -->
+    <div id="lanes-container" 
+         class="flex-1 overflow-x-auto flex gap-6 p-6 scroll-container">
+      <!-- Lanes will be dynamically added here -->
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="hidden fixed bottom-6 right-6 bg-zinc-800 border border-zinc-700 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center gap-3">
+    <span id="toast-text"></span>
+  </div>
+
+  <script>
+    // State
+    let lanes = [];
+
+    // Load from localStorage
+    function loadLanes() {
+      const saved = localStorage.getItem('redditLanes');
+      if (saved) {
+        lanes = JSON.parse(saved);
+        renderAllLanes();
+      } else {
+        // Default lanes
+        lanes = ['programming', 'news', 'memes'];
+        saveLanes();
+        renderAllLanes();
+      }
+    }
+
+    function saveLanes() {
+      localStorage.setItem('redditLanes', JSON.stringify(lanes));
+    }
+
+    // Show toast notification
+    function showToast(message, duration = 3000) {
+      const toast = document.getElementById('toast');
+      const text = document.getElementById('toast-text');
+      text.textContent = message;
+      toast.classList.remove('hidden');
+      toast.style.transform = 'translateY(0)';
+      
+      setTimeout(() => {
+        toast.style.transform = 'translateY(100px)';
+        setTimeout(() => toast.classList.add('hidden'), 300);
+      }, duration);
+    }
+
+    // Fetch subreddit posts
+    async function fetchSubreddit(subreddit) {
+      try {
+        const res = await fetch(`https://www.reddit.com/r/${subreddit}.json?limit=15`);
+        
+        if (!res.ok) {
+          if (res.status === 404) throw new Error('Subreddit not found');
+          throw new Error(`HTTP ${res.status}`);
+        }
+        
+        const data = await res.json();
+        return data.data.children.map(child => child.data);
+      } catch (err) {
+        console.error(err);
+        throw err;
+      }
+    }
+
+    // Validate subreddit exists (by attempting fetch)
+    async function validateSubreddit(subreddit) {
+      try {
+        const res = await fetch(`https://www.reddit.com/r/${subreddit}.json?limit=1`);
+        return res.ok;
+      } catch {
+        return false;
+      }
+    }
+
+    // Create a single lane element
+    async function createLaneElement(subreddit) {
+      const lane = document.createElement('div');
+      lane.className = `lane bg-zinc-900 rounded-2xl border border-zinc-800 flex flex-col h-full min-h-[600px] w-96 flex-shrink-0 overflow-hidden`;
+      lane.dataset.subreddit = subreddit;
+
+      lane.innerHTML = `
+        <div class="px-5 py-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-950">
+          <div class="flex items-center gap-3">
+            <i class="fa-brands fa-reddit-alien text-orange-500"></i>
+            <div>
+              <h3 class="font-semibold text-lg">r/${subreddit}</h3>
+              <p class="text-xs text-zinc-500">Hot posts</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="refreshLane('${subreddit}')" 
+                    class="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white">
+              <i class="fas fa-sync-alt"></i>
+            </button>
+            <button onclick="removeLane('${subreddit}')" 
+                    class="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-red-400">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+        </div>
+        
+        <div id="posts-${subreddit}" 
+             class="flex-1 overflow-y-auto p-4 space-y-4 scroll-container">
+          <!-- Loading state -->
+          <div class="flex justify-center py-12">
+            <div class="animate-spin w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full"></div>
+          </div>
+        </div>
+      `;
+
+      // Fetch and render posts
+      try {
+        const postsContainer = lane.querySelector(`#posts-${subreddit}`);
+        const posts = await fetchSubreddit(subreddit);
+        
+        postsContainer.innerHTML = posts.map(post => `
+          <div class="post-card bg-zinc-800 rounded-xl p-5 cursor-pointer" 
+               onclick="window.open('https://reddit.com${post.permalink}', '_blank')">
+            <div class="flex gap-4">
+              <!-- Vote column -->
+              <div class="flex flex-col items-center text-xs text-zinc-400 w-10">
+                <i class="fas fa-arrow-up"></i>
+                <span class="font-medium text-emerald-400 my-1">${(post.ups / 1000).toFixed(1)}k</span>
+                <i class="fas fa-arrow-down"></i>
+              </div>
+              
+              <!-- Content -->
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 text-xs text-zinc-500 mb-2">
+                  <span class="font-medium">u/${post.author}</span>
+                  <span>•</span>
+                  <span>${Math.floor((Date.now()/1000 - post.created_utc)/3600)}h ago</span>
+                </div>
+                
+                <h4 class="font-medium leading-snug text-[15px] line-clamp-3 mb-3">${post.title}</h4>
+                
+                ${post.thumbnail && post.thumbnail !== 'self' && post.thumbnail !== 'default' ? 
+                  `<img src="${post.thumbnail}" class="w-full h-40 object-cover rounded-lg mb-3">` : ''}
+                
+                <div class="flex items-center gap-5 text-xs text-zinc-400">
+                  <div class="flex items-center gap-1">
+                    <i class="fas fa-comment"></i>
+                    <span>${post.num_comments}</span>
+                  </div>
+                  <div>${post.subreddit_name_prefixed}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `).join('') || '<div class="text-center py-12 text-zinc-500">No posts found</div>';
+        
+      } catch (err) {
+        const postsContainer = lane.querySelector(`#posts-${subreddit}`);
+        postsContainer.innerHTML = `
+          <div class="bg-red-950 border border-red-900 text-red-400 p-6 rounded-xl text-center">
+            <i class="fas fa-exclamation-triangle text-2xl mb-3 block"></i>
+            <p class="font-medium">Failed to load r/${subreddit}</p>
+            <p class="text-xs mt-1">${err.message}</p>
+          </div>
+        `;
+      }
+
+      return lane;
+    }
+
+    // Render all lanes
+    async function renderAllLanes() {
+      const container = document.getElementById('lanes-container');
+      container.innerHTML = '';
+      
+      for (const sub of lanes) {
+        const laneEl = await createLaneElement(sub);
+        container.appendChild(laneEl);
+      }
+    }
+
+    // Add new lane
+    async function addLane() {
+      const input = document.getElementById('subreddit-input');
+      let sub = input.value.trim().toLowerCase();
+      
+      if (!sub) return;
+      
+      // Remove r/ prefix if present
+      if (sub.startsWith('r/')) sub = sub.slice(2);
+      
+      if (lanes.includes(sub)) {
+        showToast(`r/${sub} is already added`);
+        return;
+      }
+      
+      // Validate
+      showToast(`Checking r/${sub}...`, 1500);
+      
+      const exists = await validateSubreddit(sub);
+      if (!exists) {
+        showToast(`r/${sub} does not exist or is private`, 4000);
+        return;
+      }
+      
+      lanes.push(sub);
+      saveLanes();
+      renderAllLanes();
+      
+      input.value = '';
+      showToast(`Added r/${sub}`);
+    }
+
+    // Remove lane
+    function removeLane(subreddit) {
+      lanes = lanes.filter(s => s !== subreddit);
+      saveLanes();
+      renderAllLanes();
+      showToast(`Removed r/${subreddit}`);
+    }
+
+    // Refresh single lane
+    async function refreshLane(subreddit) {
+      const lane = document.querySelector(`[data-subreddit="${subreddit}"]`);
+      if (!lane) return;
+      
+      const postsContainer = lane.querySelector(`#posts-${subreddit}`);
+      postsContainer.innerHTML = `
+        <div class="flex justify-center py-12">
+          <div class="animate-spin w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full"></div>
+        </div>
+      `;
+      
+      try {
+        const posts = await fetchSubreddit(subreddit);
+        // Reuse the same rendering logic
+        postsContainer.innerHTML = posts.map(post => `
+          <div class="post-card bg-zinc-800 rounded-xl p-5 cursor-pointer" 
+               onclick="window.open('https://reddit.com${post.permalink}', '_blank')">
+            <div class="flex gap-4">
+              <div class="flex flex-col items-center text-xs text-zinc-400 w-10">
+                <i class="fas fa-arrow-up"></i>
+                <span class="font-medium text-emerald-400 my-1">${(post.ups / 1000).toFixed(1)}k</span>
+                <i class="fas fa-arrow-down"></i>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 text-xs text-zinc-500 mb-2">
+                  <span class="font-medium">u/${post.author}</span>
+                  <span>•</span>
+                  <span>${Math.floor((Date.now()/1000 - post.created_utc)/3600)}h ago</span>
+                </div>
+                <h4 class="font-medium leading-snug text-[15px] line-clamp-3 mb-3">${post.title}</h4>
+                ${post.thumbnail && post.thumbnail !== 'self' && post.thumbnail !== 'default' ? 
+                  `<img src="${post.thumbnail}" class="w-full h-40 object-cover rounded-lg mb-3">` : ''}
+                <div class="flex items-center gap-5 text-xs text-zinc-400">
+                  <div class="flex items-center gap-1">
+                    <i class="fas fa-comment"></i>
+                    <span>${post.num_comments}</span>
+                  </div>
+                  <div>${post.subreddit_name_prefixed}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `).join('');
+      } catch (e) {
+        postsContainer.innerHTML = `<div class="text-red-400 p-4 text-center">Failed to refresh</div>`;
+      }
+    }
+
+    // Clear everything
+    function clearAllLanes() {
+      if (!confirm('Remove all lanes?')) return;
+      lanes = [];
+      saveLanes();
+      renderAllLanes();
+      showToast('All lanes cleared');
+    }
+
+    // Keyboard support
+    document.getElementById('subreddit-input').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') addLane();
+    });
+
+    // Tailwind script already included via CDN
+
+    // Initialize
+    window.onload = () => {
+      loadLanes();
+      
+      // Optional: Auto-refresh every 10 minutes (Reddit rate limits are generous for .json)
+      setInterval(() => {
+        renderAllLanes();
+      }, 10 * 60 * 1000);
+    };
+  </script>
+</body>
+</html>
